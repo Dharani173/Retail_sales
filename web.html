@@ -1,0 +1,223 @@
+  <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Retail Sales Dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Serif+Display&display=swap">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+color-scheme:light;--bg:#ffffff;--card:#fcfbff;--text:#3a3260;--muted:#8a82a8;--line:#ebe5f9;--accent:#8e74e2;--accent-soft:#f4f0fe;--warn:#c0392b;--warn-soft:#fdeceb}
+
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--text);font-family:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.5}
+main{max-width:1120px;margin:0 auto;padding:40px 20px 56px}
+h1{font-family:"DM Serif Display",Georgia,"Times New Roman",serif;font-weight:400;font-size:clamp(2rem,5vw,3.2rem);line-height:1.1;margin:0 0 10px;max-width:16em}
+.lead{color:var(--muted);margin:0 0 28px;max-width:46em}
+.drop{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;border:2px dashed var(--line);border-radius:18px;padding:26px;background:var(--card);transition:border-color .2s,background .2s}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop strong{display:block;font-size:1.15rem}
+.drop span{color:var(--muted);font-size:.92rem}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+button{font:inherit;font-weight:700;border-radius:12px;padding:11px 18px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--text)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#err{display:none;margin-top:14px;padding:12px 16px;border-radius:12px;background:var(--warn-soft);color:var(--warn);white-space:pre-line}
+#dash{display:none;margin-top:34px}
+.file{color:var(--muted);margin:0 0 14px;font-size:.92rem}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.kpi{padding:18px 20px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);margin:0 -1px -1px 0}
+.kpi dt{color:var(--muted);font-size:.85rem}
+.kpi dd{margin:4px 0 0;font-weight:700;font-size:1.35rem;overflow-wrap:anywhere}
+.kpi.big{background:var(--accent-soft);grid-column:span 2}
+.kpi.big dd{font-family:"DM Serif Display",Georgia,serif;font-weight:400;font-size:2rem;white-space:nowrap}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,470px),1fr));gap:18px;margin-top:18px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px}
+.panel h2{font-size:1rem;margin:0 0 14px}
+.panel.wide{grid-column:1/-1}
+.box{position:relative;height:300px}
+.wide .box{height:320px}
+footer{margin-top:34px;color:var(--muted);font-size:.85rem}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+  <h1>See how your store is selling, from one CSV file.</h1>
+  <p class="lead">Upload your sales file and get revenue, best sellers and monthly trends instantly. Your data stays in your browser and is never uploaded anywhere.</p>
+
+  <div class="drop" id="drop">
+    <div>
+      <strong>Drop your CSV here</strong>
+      <span>Columns needed: Date, Product, Category, Region, Quantity, Unit_Price</span>
+    </div>
+    <div class="btns">
+      <button class="primary" id="pick">Choose CSV file</button>
+      <button id="sample">Try sample data</button>
+    </div>
+    <input type="file" id="file" accept=".csv,text/csv" hidden>
+  </div>
+  <div id="err" role="alert"></div>
+
+  <section id="dash" aria-live="polite">
+    <p class="file" id="fname"></p>
+    <dl class="strip" id="kpis"></dl>
+    <div class="grid">
+      <div class="panel wide"><h2>Monthly sales trend</h2><div class="box"><canvas id="c1"></canvas></div></div>
+      <div class="panel"><h2>Sales by category</h2><div class="box"><canvas id="c2"></canvas></div></div>
+      <div class="panel"><h2>Sales share by region</h2><div class="box"><canvas id="c3"></canvas></div></div>
+      <div class="panel wide"><h2>Top 5 products</h2><div class="box"><canvas id="c4"></canvas></div></div>
+    </div>
+  </section>
+  <footer>Retail Sales Dashboard · mini project</footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const REQUIRED = ["date","product","category","region","quantity","unit_price"];
+const PALETTE = ["#a58be8","#cdbdf5","#8e74e2","#e1d8f9","#b9a6ef","#9f88e6"];
+const money = n => "₹" + Math.round(n).toLocaleString("en-IN");
+let charts = [], current = null;
+
+function parseCSV(text){
+  const rows = []; let row = [], f = "", q = false;
+  text = text.replace(/^\uFEFF/, "");
+  for (let i = 0; i < text.length; i++){
+    const ch = text[i];
+    if (q){
+      if (ch === '"'){ if (text[i+1] === '"'){ f += '"'; i++; } else q = false; }
+      else f += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ","){ row.push(f); f = ""; }
+    else if (ch === "\n" || ch === "\r"){
+      if (ch === "\r" && text[i+1] === "\n") i++;
+      row.push(f); f = "";
+      if (row.some(c => c.trim() !== "")) rows.push(row);
+      row = [];
+    } else f += ch;
+  }
+  row.push(f);
+  if (row.some(c => c.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+function monthOf(s){
+  s = String(s).trim(); let m;
+  if (m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/)) return m[1] + "-" + m[2].padStart(2,"0");
+  if (m = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/)){
+    let mo = +m[2]; if (mo > 12) mo = +m[1];
+    if (mo >= 1 && mo <= 12) return m[3] + "-" + String(mo).padStart(2,"0");
+  }
+  return null;
+}
+const num = v => parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
+
+function analyse(text){
+  const rows = parseCSV(text);
+  if (rows.length < 2) throw new Error("The file is empty or has no data rows.");
+  const head = rows[0].map(h => h.trim().toLowerCase().replace(/\s+/g, "_"));
+  const missing = REQUIRED.filter(c => !head.includes(c));
+  if (missing.length) throw new Error("Missing column(s): " + missing.join(", ") + "\nYour file has: " + rows[0].join(", "));
+  const ix = Object.fromEntries(REQUIRED.map(c => [c, head.indexOf(c)]));
+  const recs = []; let skipped = 0;
+  for (const r of rows.slice(1)){
+    const month = monthOf(r[ix.date] || ""), qty = num(r[ix.quantity]), price = num(r[ix.unit_price]);
+    const product = (r[ix.product] || "").trim();
+    if (!month || !product || isNaN(qty) || isNaN(price)){ skipped++; continue; }
+    recs.push({month, product, category: (r[ix.category] || "").trim() || "Unknown",
+               region: (r[ix.region] || "").trim() || "Unknown", qty, total: qty * price});
+  }
+  if (!recs.length) throw new Error("No valid rows found. Check your Date, Quantity and Unit_Price values.");
+  return {recs, skipped};
+}
+
+function groupBy(recs, key){
+  const t = {};
+  recs.forEach(r => t[r[key]] = (t[r[key]] || 0) + r.total);
+  return Object.entries(t);
+}
+
+function render(){
+  if (!current) return;
+  const {recs, skipped, name} = current;
+  const css = getComputedStyle(document.documentElement);
+  const text = css.getPropertyValue("--text").trim(), muted = css.getPropertyValue("--muted").trim(), line = css.getPropertyValue("--line").trim();
+  Chart.defaults.color = muted; Chart.defaults.font.family = '"DM Sans", system-ui, sans-serif';
+  charts.forEach(c => c.destroy()); charts = [];
+
+  const revenue = recs.reduce((s, r) => s + r.total, 0), units = recs.reduce((s, r) => s + r.qty, 0);
+  const byProd = groupBy(recs, "product").sort((a,b) => b[1]-a[1]);
+  const byReg = groupBy(recs, "region").sort((a,b) => b[1]-a[1]);
+  const byCat = groupBy(recs, "category").sort((a,b) => b[1]-a[1]);
+  const byMon = groupBy(recs, "month").sort((a,b) => a[0].localeCompare(b[0]));
+
+  $("fname").textContent = name + (skipped ? " · " + skipped + " row(s) skipped because of bad data" : "");
+  const k = [["Total revenue", money(revenue), "big"], ["Orders", recs.length.toLocaleString("en-IN")], ["Units sold", Math.round(units).toLocaleString("en-IN")],
+             ["Average order", money(revenue / recs.length)], ["Best product", byProd[0][0]], ["Best region", byReg[0][0]]];
+  $("kpis").innerHTML = k.map(x => `<div class="kpi ${x[2] || ""}"><dt>${x[0]}</dt><dd></dd></div>`).join("");
+  $("kpis").querySelectorAll("dd").forEach((d, i) => d.textContent = k[i][1]);
+
+  const axis = {grid: {color: line}, ticks: {callback: v => v >= 1e5 ? (v/1e5).toFixed(0) + "L" : v}};
+  const base = {responsive: true, maintainAspectRatio: false, plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => " " + money(c.parsed.y ?? c.parsed.x ?? c.parsed)}}}};
+
+  charts.push(new Chart($("c1"), {type: "line", data: {labels: byMon.map(x => x[0]),
+    datasets: [{data: byMon.map(x => x[1]), borderColor: PALETTE[0], backgroundColor: PALETTE[0] + "33", fill: true, tension: .3, pointRadius: 4}]},
+    options: {...base, scales: {x: {grid: {display: false}}, y: axis}}}));
+  charts.push(new Chart($("c2"), {type: "bar", data: {labels: byCat.map(x => x[0]),
+    datasets: [{data: byCat.map(x => x[1]), backgroundColor: PALETTE, borderRadius: 8}]},
+    options: {...base, scales: {x: {grid: {display: false}}, y: axis}}}));
+  charts.push(new Chart($("c3"), {type: "doughnut", data: {labels: byReg.map(x => x[0]),
+    datasets: [{data: byReg.map(x => x[1]), backgroundColor: PALETTE, borderColor: css.getPropertyValue("--card").trim(), borderWidth: 3}]},
+    options: {responsive: true, maintainAspectRatio: false, cutout: "58%", plugins: {legend: {position: "right", labels: {color: text}},
+      tooltip: {callbacks: {label: c => " " + c.label + ": " + money(c.parsed) + " (" + (c.parsed / revenue * 100).toFixed(1) + "%)"}}}}}));
+  const top = byProd.slice(0, 5);
+  charts.push(new Chart($("c4"), {type: "bar", data: {labels: top.map(x => x[0]),
+    datasets: [{data: top.map(x => x[1]), backgroundColor: PALETTE[2], borderRadius: 8}]},
+    options: {...base, indexAxis: "y", scales: {y: {grid: {display: false}}, x: axis}}}));
+}
+
+function load(text, name){
+  try{
+    const {recs, skipped} = analyse(text);
+    current = {recs, skipped, name};
+    $("err").style.display = "none"; $("dash").style.display = "block";
+    render(); $("dash").scrollIntoView({behavior: "smooth", block: "start"});
+  }catch(e){
+    $("dash").style.display = "none"; $("err").style.display = "block"; $("err").textContent = e.message;
+  }
+}
+
+function readFile(f){
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => load(r.result, f.name);
+  r.onerror = () => { $("err").style.display = "block"; $("err").textContent = "Could not read that file. Try another CSV."; };
+  r.readAsText(f);
+}
+
+function sampleCSV(){
+  let s = 42; const rnd = () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const P = [["Laptop","Electronics",55000],["Smartphone","Electronics",20000],["Headphones","Electronics",2500],["T-Shirt","Clothing",600],
+             ["Jeans","Clothing",1500],["Jacket","Clothing",3000],["Rice Bag","Grocery",900],["Cooking Oil","Grocery",200],["Biscuits","Grocery",40],["Notebook","Stationery",60]];
+  const R = ["North","South","East","West"]; let out = "Date,Product,Category,Region,Quantity,Unit_Price\n";
+  for (let d = new Date(Date.UTC(2025,0,1)); d <= new Date(Date.UTC(2025,11,31)); d.setUTCDate(d.getUTCDate() + 3))
+    for (let i = 0; i < 3; i++){
+      const p = P[Math.floor(rnd() * P.length)];
+      out += [d.toISOString().slice(0,10), p[0], p[1], R[Math.floor(rnd() * 4)], 1 + Math.floor(rnd() * 10), p[2]].join(",") + "\n";
+    }
+  return out;
+}
+
+$("pick").onclick = () => $("file").click();
+$("file").onchange = e => { readFile(e.target.files[0]); e.target.value = ""; };
+$("sample").onclick = () => load(sampleCSV(), "sample_data.csv");
+const drop = $("drop");
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => readFile(e.dataTransfer.files[0]));
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+</script>
+</body>
+</html>
